@@ -1,43 +1,208 @@
-from models import db, Admin
+from models import (
+    db, Admin, ShowerType, GlassType, Finish, HardwareType, GlassThickness, SealType,
+    HardwarePricing, SealPricing, GlassPricing, Model, ModelGlassComponent, ModelHardwareComponent, ModelSealComponent
+)
 from flask import Flask
+from dotenv import load_dotenv
+import os
 
-# Set up Flask app and DB (must match your main app config)
+# ==== Load Environment Variables ====
+load_dotenv()
+
+# ==== Flask App Setup (for DB context only) ====
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///shower_quote.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///shower_quote.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 db.init_app(app)
 
-# ====== EDIT THESE ======
-username = "admin"      # Change to your desired username
-password = "admin123"   # Change to your desired password
+def create_admin_user(username, password):
+    with app.app_context():
+        db.create_all()
+        if Admin.query.filter_by(username=username).first():
+            print(f"Admin user '{username}' already exists!")
+        else:
+            admin = Admin(username=username)
+            admin.set_password(password)
+            db.session.add(admin)
+            db.session.commit()
+            print(f"Admin user '{username}' created successfully!")
 
-with app.app_context():
-    # Ensure the table exists
-    db.create_all()
-
-    # Check if admin already exists
-    existing = Admin.query.filter_by(username=username).first()
-    if existing:
-        print(f"Admin user '{username}' already exists!")
-    else:
-        admin = Admin(username=username)
-        admin.set_password(password)
-        db.session.add(admin)
+def seed_if_missing(Model, field, values):
+    with app.app_context():
+        for value in values:
+            exists = Model.query.filter(getattr(Model, field) == value).first()
+            if not exists:
+                db.session.add(Model(**{field: value}))
+                print(f"{Model.__name__} '{value}' added!")
         db.session.commit()
-        print(f"Admin user '{username}' created successfully!")
+        print(f"{Model.__name__}s seeded successfully!")
 
-# =========================================
-# You can expand this script to easily add
-# other initial data for your new tables,
-# such as GlassType, Finish, HardwareType,
-# GlassThickness, SealType, etc.
-#
-# Example:
-# from models import GlassType
-# with app.app_context():
-#     if not GlassType.query.filter_by(name="Clear").first():
-#         db.session.add(GlassType(name="Clear"))
-#         db.session.commit()
-#         print("Initial GlassType 'Clear' added!")
-# =========================================
+def get_or_create(session, Model, **kwargs):
+    instance = session.query(Model).filter_by(**kwargs).first()
+    if not instance:
+        instance = Model(**kwargs)
+        session.add(instance)
+        session.commit()
+    return instance
+
+def seed_hardware_pricing():
+    with app.app_context():
+        hardware_types = ["Hardware Type 1", "Hardware Type 2", "Hardware Type 3"]
+        finishes = ["Black", "Gold", "Nickel", "White", "Rose Gold", "Graphite", "Chrome"]
+        prices = [
+            [80, 86, 79, 111, 82, 84, 79],      # Hardware Type 1
+            [111, 61, 117, 107, 91, 72, 75],    # Hardware Type 2
+            [95, 110, 59, 56, 69, 56, 109],     # Hardware Type 3
+        ]
+        for i, hw_type in enumerate(hardware_types):
+            hw = get_or_create(db.session, HardwareType, name=hw_type)
+            for j, finish_name in enumerate(finishes):
+                finish = get_or_create(db.session, Finish, name=finish_name)
+                price = prices[i][j]
+                exists = HardwarePricing.query.filter_by(hardware_type_id=hw.id, finish_id=finish.id).first()
+                if not exists:
+                    db.session.add(HardwarePricing(
+                        hardware_type_id=hw.id,
+                        finish_id=finish.id,
+                        unit_price=price
+                    ))
+                    print(f"HardwarePricing: {hw_type} / {finish_name} = {price}")
+        db.session.commit()
+        print("Hardware pricing seeded successfully!")
+
+def seed_gasket_pricing():
+    with app.app_context():
+        gasket_types = ["Gasket Type 1", "Gasket Type 2", "Gasket Type 3"]
+        finishes = ["Black", "White", "Transparent", "Grey", "Beige"]
+        prices = [
+            [22, 16, 16, 27, 32],  # Gasket Type 1
+            [15, 21, 32, 28, 15],  # Gasket Type 2
+            [15, 25, 21, 31, 25],  # Gasket Type 3
+        ]
+        for i, gasket_type in enumerate(gasket_types):
+            seal_type = get_or_create(db.session, SealType, name=gasket_type)
+            for j, finish_name in enumerate(finishes):
+                finish = get_or_create(db.session, Finish, name=finish_name)
+                price = prices[i][j]
+                exists = SealPricing.query.filter_by(seal_type_id=seal_type.id, finish_id=finish.id).first()
+                if not exists:
+                    db.session.add(SealPricing(
+                        seal_type_id=seal_type.id,
+                        finish_id=finish.id,
+                        unit_price=price
+                    ))
+                    print(f"SealPricing: {gasket_type} / {finish_name} = {price}")
+        db.session.commit()
+        print("Gasket/Seal pricing seeded successfully!")
+
+def seed_glass_pricing():
+    with app.app_context():
+        glass_types = ["Clear", "Frosted", "Tempered", "Tinted"]
+        thicknesses = [6, 8, 10, 12]
+        # Example prices (could be enhanced with real values)
+        base_price = 100
+        for i, glass_type_name in enumerate(glass_types):
+            glass_type = get_or_create(db.session, GlassType, name=glass_type_name)
+            for j, thickness_mm in enumerate(thicknesses):
+                thickness = get_or_create(db.session, GlassThickness, thickness_mm=thickness_mm)
+                price = base_price + i * 10 + j * 5
+                exists = db.session.query(GlassPricing).filter_by(
+                    glass_type_id=glass_type.id,
+                    thickness_id=thickness.id
+                ).first()
+                if not exists:
+                    db.session.add(GlassPricing(
+                        glass_type_id=glass_type.id,
+                        thickness_id=thickness.id,
+                        price_per_m2=price
+                    ))
+                    print(f"GlassPricing: {glass_type_name} / {thickness_mm}mm = {price}")
+        db.session.commit()
+        print("Glass pricing seeded successfully!")
+
+def seed_demo_model_with_components():
+    with app.app_context():
+        # Create a demo model
+        model = Model.query.filter_by(name="Demo Model 1").first()
+        if not model:
+            shower_type = get_or_create(db.session, ShowerType, name="Demo ShowerType")
+            model = Model(
+                name="Demo Model 1",
+                description="A sample model for testing",
+                image_path="demo_model_1.jpg",
+                shower_type_id=shower_type.id
+            )
+            db.session.add(model)
+            db.session.commit()
+            print("Demo Model 1 created.")
+
+        # Glass component
+        glass_type = GlassType.query.first()
+        thickness = GlassThickness.query.first()
+        if glass_type and thickness:
+            if not ModelGlassComponent.query.filter_by(model_id=model.id).first():
+                db.session.add(ModelGlassComponent(
+                    model_id=model.id,
+                    glass_type_id=glass_type.id,
+                    thickness_id=thickness.id,
+                    quantity=2
+                ))
+                print("Glass component added to Demo Model 1.")
+
+        # Hardware component
+        hardware_type = HardwareType.query.first()
+        finish = Finish.query.filter_by(name="Chrome").first()
+        if hardware_type and finish:
+            if not ModelHardwareComponent.query.filter_by(model_id=model.id).first():
+                db.session.add(ModelHardwareComponent(
+                    model_id=model.id,
+                    hardware_type_id=hardware_type.id,
+                    finish_id=finish.id,
+                    quantity=3
+                ))
+                print("Hardware component added to Demo Model 1.")
+
+        # Seal component
+        seal_type = SealType.query.first()
+        seal_finish = Finish.query.filter_by(name="Black").first()
+        if seal_type and seal_finish:
+            if not ModelSealComponent.query.filter_by(model_id=model.id).first():
+                db.session.add(ModelSealComponent(
+                    model_id=model.id,
+                    seal_type_id=seal_type.id,
+                    finish_id=seal_finish.id,
+                    quantity=4
+                ))
+                print("Seal component added to Demo Model 1.")
+
+        db.session.commit()
+        print("Demo Model 1 components seeded successfully!")
+
+if __name__ == "__main__":
+    admin_username = os.getenv('ADMIN_USERNAME', 'admin')
+    admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
+
+    create_admin_user(admin_username, admin_password)
+    # Showers, glass, finishes, hardware, thicknesses, seals
+    seed_if_missing(ShowerType, 'name', ["Demo ShowerType", "Handheld", "Rainfall"])
+    seed_if_missing(GlassType, 'name', ["Clear", "Frosted", "Tempered", "Tinted"])
+    all_finishes = [
+        "Chrome", "Brushed Nickel", "Matte Black", "Gold", "Black", "Nickel", "White",
+        "Rose Gold", "Graphite", "Transparent", "Grey", "Beige"
+    ]
+    seed_if_missing(Finish, 'name', all_finishes)
+    seed_if_missing(HardwareType, 'name', [
+        "Hinge", "Handle", "Knob", "Channel",
+        "Hardware Type 1", "Hardware Type 2", "Hardware Type 3"
+    ])
+    seed_if_missing(GlassThickness, 'thickness_mm', [6, 8, 10, 12])
+    seed_if_missing(SealType, 'name', [
+        "Straight Seal", "Angled Seal", "Bottom Seal",
+        "Gasket Type 1", "Gasket Type 2", "Gasket Type 3"
+    ])
+
+    seed_hardware_pricing()
+    seed_gasket_pricing()
+    seed_glass_pricing()
+    seed_demo_model_with_components()
+    print("\nDatabase initialization and seeding complete!")

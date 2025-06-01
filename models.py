@@ -49,11 +49,17 @@ class Model(db.Model):
 # =======================
 class GlassType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
+    name = db.Column(db.String, nullable=False, unique=True)
+
+    def to_dict(self):
+        return {'id': self.id, 'name': self.name}
 
 class GlassThickness(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    thickness_mm = db.Column(db.Integer, nullable=False)  # e.g. 6, 8, 10
+    thickness_mm = db.Column(db.Integer, nullable=False, unique=True)  # e.g. 6, 8, 10
+
+    def to_dict(self):
+        return {'id': self.id, 'thickness_mm': self.thickness_mm}
 
 class GlassPricing(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -61,22 +67,40 @@ class GlassPricing(db.Model):
     thickness_id = db.Column(db.Integer, db.ForeignKey('glass_thickness.id'), nullable=False)
     price_per_m2 = db.Column(db.Float, nullable=False)
 
+    __table_args__ = (db.UniqueConstraint('glass_type_id', 'thickness_id', name='_glass_type_thickness_uc'),)
+
     glass_type = db.relationship('GlassType')
     thickness = db.relationship('GlassThickness')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'glass_type_id': self.glass_type_id,
+            'glass_type': self.glass_type.name if self.glass_type else None,
+            'thickness_id': self.thickness_id,
+            'thickness_mm': self.thickness.thickness_mm if self.thickness else None,
+            'price_per_m2': self.price_per_m2
+        }
 
 # =======================
 # Finish: Represents a hardware finish/material/color (e.g., Nickel, Gold)
 # =======================
 class Finish(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
+    name = db.Column(db.String, nullable=False, unique=True)
+
+    def to_dict(self):
+        return {'id': self.id, 'name': self.name}
 
 # =======================
 # HardwareType: e.g. Hinge, Handle, Wall Profile
 # =======================
 class HardwareType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
+    name = db.Column(db.String, nullable=False, unique=True)
+
+    def to_dict(self):
+        return {'id': self.id, 'name': self.name}
 
 # =======================
 # HardwarePricing: price for each hardware type + finish
@@ -87,22 +111,51 @@ class HardwarePricing(db.Model):
     finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'), nullable=False)
     unit_price = db.Column(db.Float, nullable=False)
 
+    __table_args__ = (db.UniqueConstraint('hardware_type_id', 'finish_id', name='_hardware_type_finish_uc'),)
+
     hardware_type = db.relationship('HardwareType')
     finish = db.relationship('Finish')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'hardware_type_id': self.hardware_type_id,
+            'hardware_type': self.hardware_type.name if self.hardware_type else None,
+            'finish_id': self.finish_id,
+            'finish': self.finish.name if self.finish else None,
+            'unit_price': self.unit_price
+        }
 
 # =======================
 # SealType: e.g. Side Seal, Balloon, Magnetic
 # =======================
 class SealType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
+    name = db.Column(db.String, nullable=False, unique=True)
+
+    def to_dict(self):
+        return {'id': self.id, 'name': self.name}
 
 class SealPricing(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'), nullable=False)
+    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'), nullable=False)
     unit_price = db.Column(db.Float, nullable=False)
 
+    __table_args__ = (db.UniqueConstraint('seal_type_id', 'finish_id', name='_seal_type_finish_uc'),)
+
     seal_type = db.relationship('SealType')
+    finish = db.relationship('Finish')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seal_type_id': self.seal_type_id,
+            'seal_type': self.seal_type.name if self.seal_type else None,
+            'finish_id': self.finish_id,
+            'finish': self.finish.name if self.finish else None,
+            'unit_price': self.unit_price
+        }
 
 # =======================
 # ModelGlassComponent: Glass panel definition per model
@@ -120,7 +173,9 @@ class ModelGlassComponent(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'glass_type_id': self.glass_type_id,
             'glass_type': self.glass_type.name if self.glass_type else None,
+            'thickness_id': self.thickness_id,
             'thickness': self.thickness.thickness_mm if self.thickness else None,
             'quantity': self.quantity
         }
@@ -141,26 +196,33 @@ class ModelHardwareComponent(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'hardware_type_id': self.hardware_type_id,
             'hardware_type': self.hardware_type.name if self.hardware_type else None,
+            'finish_id': self.finish_id,
             'finish': self.finish.name if self.finish else None,
             'quantity': self.quantity
         }
 
 # =======================
-# ModelSealComponent: Seal definition per model
+# ModelSealComponent: Seal definition per model (now includes finish_id)
 # =======================
 class ModelSealComponent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     model_id = db.Column(db.Integer, db.ForeignKey('model.id'), nullable=False)
     seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'), nullable=False)
+    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False, default=1)
 
     seal_type = db.relationship('SealType')
+    finish = db.relationship('Finish')
 
     def to_dict(self):
         return {
             'id': self.id,
+            'seal_type_id': self.seal_type_id,
             'seal_type': self.seal_type.name if self.seal_type else None,
+            'finish_id': self.finish_id,
+            'finish': self.finish.name if self.finish else None,
             'quantity': self.quantity
         }
 
@@ -175,6 +237,14 @@ class Addon(db.Model):
 
     model = db.relationship('Model')
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'price': self.price,
+            'model_id': self.model_id
+        }
+
 # =======================
 # GalleryImage: Stores image paths and descriptions for gallery
 # =======================
@@ -182,6 +252,13 @@ class GalleryImage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     image_path = db.Column(db.String, nullable=False)
     description = db.Column(db.String)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'image_path': self.image_path,
+            'description': self.description
+        }
 
 # =======================
 # Admin: Stores admin credentials for authentication
@@ -198,3 +275,9 @@ class Admin(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username
+        }

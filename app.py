@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify, session, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from models import (
     db, ShowerType, Model, GlassType, Finish, Addon, GalleryImage, Admin,
     GlassThickness, GlassPricing,
@@ -8,38 +9,48 @@ from models import (
     ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,
 )
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
 import os
-from functools import wraps
+import uuid
+
+# ==== Load Environment Variables ====
+load_dotenv()
 
 # ==== Flask App Setup ====
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///shower_quote.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///shower_quote.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'a72d56dddaccf4d95715146efe7fd93b49c0672a97a16eed482c9cf33bfc7344'  # Change this in production!
-app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
-app.config['MAX_CONTENT_LENGTH'] = 4 * 1024 * 1024  # 4MB max upload size
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key-change-me')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-jwt-secret-key')
+app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_CONTENT_LENGTH', 4 * 1024 * 1024))  # Default to 4MB
+app.debug = os.getenv('DEBUG', 'False').lower() == 'true'
 
+# Ensure upload folder exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
 
 db.init_app(app)
-CORS(app, supports_credentials=True)  # To allow credentialed requests for session-based auth
+CORS(app, supports_credentials=True)
+jwt = JWTManager(app)
 
-# ==== Utility: Protect Admin Routes ====
-def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('admin_id'):
+from functools import wraps
+
+def admin_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def wrapper(*args, **kwargs):
+        admin_id = get_jwt_identity()
+        if not admin_id:
             return jsonify({"error": "Authentication required"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
+        return fn(*args, **kwargs)
+    return wrapper
 
-# ==== Home Route ====
 @app.route("/")
 def home():
     return jsonify({"message": "Flask backend is running!"})
 
-# ==== AUTHENTICATION: Admin Login/Logout ====
+# ==== AUTHENTICATION ====
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -47,14 +58,20 @@ def login():
     password = data.get("password")
     admin = Admin.query.filter_by(username=username).first()
     if admin and admin.check_password(password):
-        session['admin_id'] = admin.id
-        return jsonify({"success": True})
+        access_token = create_access_token(
+            identity=str(admin.id),  # identity as string
+            additional_claims={"role": "admin"}
+        )
+        return jsonify({"success": True, "access_token": access_token})
     return jsonify({"success": False, "error": "Invalid credentials"}), 401
 
+
+
 @app.route("/api/logout", methods=["POST"])
+@jwt_required()
 def logout():
-    session.pop('admin_id', None)
-    return jsonify({"success": True})
+    # With JWT, logout is handled on the client side by discarding the token.
+    return jsonify({"success": True, "message": "Logged out (client should discard JWT token)."})
 
 # ==== SHOWER TYPES CRUD ====
 @app.route("/api/shower-types", methods=["GET"])
@@ -88,38 +105,77 @@ def delete_shower_type(id):
     db.session.commit()
     return jsonify({"success": True})
 
+# Helper to save image file
+def save_image(file):
+    if not file: return None
+    filename = secure_filename(file.filename)
+    upload_dir = os.path.join(app.root_path, "static", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    filepath = os.path.join(upload_dir, filename)
+    file.save(filepath)
+    # Return relative URL to serve via Flask static route
+    return f"/static/uploads/{filename}"
+
 # ==== MODELS CRUD ====
+
 @app.route("/api/models", methods=["GET"])
 def get_models():
     models = Model.query.all()
+    # Return image_url as well for frontend preview
     return jsonify([m.to_dict() for m in models])
 
 @app.route("/api/models", methods=["POST"])
 @admin_required
 def add_model():
-    data = request.get_json()
-    model = Model(
-        name=data.get("name"),
-        description=data.get("description"),
-        image_path=data.get("image_path"),
-        shower_type_id=data.get("shower_type_id")
-    )
-    db.session.add(model)
-    db.session.commit()
-    return jsonify({"success": True, "id": model.id})
+    if request.content_type and request.content_type.startswith("multipart/form-data"):
+        name = request.form.get("name")
+        description = request.form.get("description")
+        shower_type_id = request.form.get("showerTypeId")
+        image_file = request.files.get("image")
+        image_path = save_image(image_file) if image_file else None
+        model = Model(
+            name=name,
+            description=description,
+            image_path=image_path,
+            shower_type_id=shower_type_id
+        )
+        db.session.add(model)
+        db.session.commit()
+        return jsonify(model.to_dict())
+    else:
+        data = request.get_json()
+        model = Model(
+            name=data.get("name"),
+            description=data.get("description"),
+            image_path=data.get("image_path"),
+            shower_type_id=data.get("shower_type_id")
+        )
+        db.session.add(model)
+        db.session.commit()
+        return jsonify(model.to_dict())
 
 @app.route("/api/models/<int:model_id>", methods=["PUT"])
 @admin_required
 def update_model(model_id):
-    data = request.get_json()
     model = Model.query.get_or_404(model_id)
-    model.name = data.get("name", model.name)
-    model.description = data.get("description", model.description)
-    model.image_path = data.get("image_path", model.image_path)
-    if "shower_type_id" in data:
-        model.shower_type_id = data.get("shower_type_id")
+    if request.content_type and request.content_type.startswith("multipart/form-data"):
+        name = request.form.get("name")
+        description = request.form.get("description")
+        shower_type_id = request.form.get("showerTypeId")
+        image_file = request.files.get("image")
+        if name: model.name = name
+        if description: model.description = description
+        if shower_type_id: model.shower_type_id = shower_type_id
+        if image_file:
+            model.image_path = save_image(image_file)
+    else:
+        data = request.get_json()
+        if "name" in data: model.name = data.get("name")
+        if "description" in data: model.description = data.get("description")
+        if "image_path" in data: model.image_path = data.get("image_path")
+        if "shower_type_id" in data: model.shower_type_id = data.get("shower_type_id")
     db.session.commit()
-    return jsonify({"success": True})
+    return jsonify(model.to_dict())
 
 @app.route("/api/models/<int:model_id>", methods=["DELETE"])
 @admin_required
@@ -133,13 +189,16 @@ def delete_model(model_id):
 @app.route("/api/glass-types", methods=["GET"])
 def get_glass_types():
     glass_types = GlassType.query.all()
-    return jsonify([{"id": g.id, "name": g.name} for g in glass_types])
+    return jsonify([g.to_dict() for g in glass_types])
 
 @app.route("/api/glass-types", methods=["POST"])
 @admin_required
 def add_glass_type():
     data = request.get_json()
-    glass_type = GlassType(name=data.get("name"))
+    name = data.get("name")
+    if not name:
+        return jsonify({"success": False, "error": "Name required"}), 400
+    glass_type = GlassType(name=name)
     db.session.add(glass_type)
     db.session.commit()
     return jsonify({"success": True, "id": glass_type.id})
@@ -165,7 +224,7 @@ def delete_glass_type(glass_type_id):
 @app.route("/api/glass-thickness", methods=["GET"])
 def get_glass_thickness():
     thicknesses = GlassThickness.query.all()
-    return jsonify([{"id": t.id, "thickness_mm": t.thickness_mm} for t in thicknesses])
+    return jsonify([t.to_dict() for t in thicknesses])
 
 @app.route("/api/glass-thickness", methods=["POST"])
 @admin_required
@@ -197,16 +256,7 @@ def delete_glass_thickness(thickness_id):
 @app.route("/api/glass-pricing", methods=["GET"])
 def get_glass_pricing():
     glass_pricing = GlassPricing.query.all()
-    return jsonify([
-        {
-            "id": p.id,
-            "glass_type_id": p.glass_type_id,
-            "glass_type_name": p.glass_type.name,
-            "thickness_id": p.thickness_id,
-            "thickness_mm": p.thickness.thickness_mm,
-            "price_per_m2": p.price_per_m2
-        } for p in glass_pricing
-    ])
+    return jsonify([p.to_dict() for p in glass_pricing])
 
 @app.route("/api/glass-pricing", methods=["POST"])
 @admin_required
@@ -244,7 +294,7 @@ def delete_glass_pricing(price_id):
 @app.route("/api/finishes", methods=["GET"])
 def get_finishes():
     finishes = Finish.query.all()
-    return jsonify([{"id": f.id, "name": f.name} for f in finishes])
+    return jsonify([f.to_dict() for f in finishes])
 
 @app.route("/api/finishes", methods=["POST"])
 @admin_required
@@ -276,7 +326,7 @@ def delete_finish(finish_id):
 @app.route("/api/hardware-types", methods=["GET"])
 def get_hardware_types():
     types = HardwareType.query.all()
-    return jsonify([{"id": t.id, "name": t.name} for t in types])
+    return jsonify([t.to_dict() for t in types])
 
 @app.route("/api/hardware-types", methods=["POST"])
 @admin_required
@@ -308,16 +358,7 @@ def delete_hardware_type(type_id):
 @app.route("/api/hardware-pricing", methods=["GET"])
 def get_hardware_pricing():
     pricing = HardwarePricing.query.all()
-    return jsonify([
-        {
-            "id": p.id,
-            "hardware_type_id": p.hardware_type_id,
-            "hardware_type_name": p.hardware_type.name,
-            "finish_id": p.finish_id,
-            "finish_name": p.finish.name,
-            "unit_price": p.unit_price
-        } for p in pricing
-    ])
+    return jsonify([p.to_dict() for p in pricing])
 
 @app.route("/api/hardware-pricing", methods=["POST"])
 @admin_required
@@ -355,7 +396,7 @@ def delete_hardware_pricing(price_id):
 @app.route("/api/seal-types", methods=["GET"])
 def get_seal_types():
     types = SealType.query.all()
-    return jsonify([{"id": t.id, "name": t.name} for t in types])
+    return jsonify([t.to_dict() for t in types])
 
 @app.route("/api/seal-types", methods=["POST"])
 @admin_required
@@ -387,14 +428,7 @@ def delete_seal_type(type_id):
 @app.route("/api/seal-pricing", methods=["GET"])
 def get_seal_pricing():
     pricing = SealPricing.query.all()
-    return jsonify([
-        {
-            "id": p.id,
-            "seal_type_id": p.seal_type_id,
-            "seal_type_name": p.seal_type.name,
-            "unit_price": p.unit_price
-        } for p in pricing
-    ])
+    return jsonify([p.to_dict() for p in pricing])
 
 @app.route("/api/seal-pricing", methods=["POST"])
 @admin_required
@@ -402,6 +436,7 @@ def add_seal_pricing():
     data = request.get_json()
     price = SealPricing(
         seal_type_id=data.get("seal_type_id"),
+        finish_id=data.get("finish_id"),
         unit_price=data.get("unit_price")
     )
     db.session.add(price)
@@ -414,6 +449,7 @@ def update_seal_pricing(price_id):
     data = request.get_json()
     price = SealPricing.query.get_or_404(price_id)
     price.seal_type_id = data.get("seal_type_id", price.seal_type_id)
+    price.finish_id = data.get("finish_id", price.finish_id)
     price.unit_price = data.get("unit_price", price.unit_price)
     db.session.commit()
     return jsonify({"success": True})
@@ -515,6 +551,7 @@ def add_model_seal_component():
     comp = ModelSealComponent(
         model_id=data["model_id"],
         seal_type_id=data["seal_type_id"],
+        finish_id=data["finish_id"],
         quantity=data.get("quantity", 1)
     )
     db.session.add(comp)
@@ -527,6 +564,7 @@ def update_model_seal_component(comp_id):
     data = request.get_json()
     comp = ModelSealComponent.query.get_or_404(comp_id)
     comp.seal_type_id = data.get("seal_type_id", comp.seal_type_id)
+    comp.finish_id = data.get("finish_id", comp.finish_id)
     comp.quantity = data.get("quantity", comp.quantity)
     db.session.commit()
     return jsonify({"success": True})
@@ -547,7 +585,7 @@ def get_addons():
         addons = Addon.query.filter_by(model_id=model_id).all()
     else:
         addons = Addon.query.all()
-    return jsonify([{"id": a.id, "name": a.name, "price": a.price, "model_id": a.model_id} for a in addons])
+    return jsonify([a.to_dict() for a in addons])
 
 @app.route("/api/addons", methods=["POST"])
 @admin_required
@@ -585,10 +623,7 @@ def delete_addon(addon_id):
 @app.route("/api/gallery", methods=["GET"])
 def get_gallery():
     images = GalleryImage.query.all()
-    return jsonify([
-        {"id": img.id, "image_path": img.image_path, "description": img.description}
-        for img in images
-    ])
+    return jsonify([img.to_dict() for img in images])
 
 @app.route("/api/gallery", methods=["POST"])
 @admin_required
@@ -634,50 +669,23 @@ def upload_image():
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
+        filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         image_path = f"/uploads/{filename}"
         return jsonify({"success": True, "image_path": image_path})
     return jsonify({"error": "Invalid file type"}), 400
 
-# Serve uploaded images (for development only, use static server in production)
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# ==== PRICES ENDPOINT (for backward compatibility, return all pricing data) ====
+# ==== PRICES ENDPOINT (returns all pricing data with finish/color for seals) ====
 @app.route("/api/prices", methods=["GET"])
 def get_all_prices():
-    # Aggregate all pricing for backward compatibility
     prices = {
-        "glass": [
-            {
-                "id": p.id,
-                "glass_type_id": p.glass_type_id,
-                "glass_type_name": p.glass_type.name,
-                "thickness_id": p.thickness_id,
-                "thickness_mm": p.thickness.thickness_mm,
-                "price_per_m2": p.price_per_m2
-            } for p in GlassPricing.query.all()
-        ],
-        "hardware": [
-            {
-                "id": p.id,
-                "hardware_type_id": p.hardware_type_id,
-                "hardware_type_name": p.hardware_type.name,
-                "finish_id": p.finish_id,
-                "finish_name": p.finish.name,
-                "unit_price": p.unit_price
-            } for p in HardwarePricing.query.all()
-        ],
-        "seal": [
-            {
-                "id": p.id,
-                "seal_type_id": p.seal_type_id,
-                "seal_type_name": p.seal_type.name,
-                "unit_price": p.unit_price
-            } for p in SealPricing.query.all()
-        ]
+        "glass": [p.to_dict() for p in GlassPricing.query.all()],
+        "hardware": [p.to_dict() for p in HardwarePricing.query.all()],
+        "seal": [p.to_dict() for p in SealPricing.query.all()]
     }
     return jsonify(prices)
 
@@ -685,6 +693,4 @@ def get_all_prices():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
-
-    
+    app.run(debug=app.debug)
