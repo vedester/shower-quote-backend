@@ -5,8 +5,8 @@ from models import (
     db, ShowerType, Model, GlassType, Finish, Addon, GalleryImage, Admin,
     GlassThickness, GlassPricing,
     HardwareType, HardwarePricing,
-    SealType, SealPricing,
-    ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,
+    SealType, SealPricing, 
+    ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,GasketType,GasketPricing
 )
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
@@ -434,10 +434,36 @@ def get_seal_pricing():
 @admin_required
 def add_seal_pricing():
     data = request.get_json()
+    seal_type_id = data.get("seal_type_id")
+    seal_type_name = data.get("seal_type")
+    finish_id = data.get("finish_id")
+    finish_name = data.get("finish")
+    quantity = data.get("quantity", 1)
+
+    # Accept free-text for seal_type: look up or create
+    if not seal_type_id and seal_type_name:
+        seal_type = SealType.query.filter_by(name=seal_type_name).first()
+        if not seal_type:
+            seal_type = SealType(name=seal_type_name)
+            db.session.add(seal_type)
+            db.session.commit()
+        seal_type_id = seal_type.id
+
+        # Accept free-text for finish: look up or create
+    if not finish_id and finish_name:
+        finish = Finish.query.filter_by(name=finish_name).first()
+        if not finish:
+            finish = Finish(name=finish_name)
+            db.session.add(finish)
+            db.session.commit()
+        finish_id = finish.id
+
+    # HERE: create the new price object!
     price = SealPricing(
-        seal_type_id=data.get("seal_type_id"),
-        finish_id=data.get("finish_id"),
-        unit_price=data.get("unit_price")
+        seal_type_id=seal_type_id,
+        finish_id=finish_id,
+        unit_price=data.get("unit_price"),
+        quantity=quantity
     )
     db.session.add(price)
     db.session.commit()
@@ -448,9 +474,32 @@ def add_seal_pricing():
 def update_seal_pricing(price_id):
     data = request.get_json()
     price = SealPricing.query.get_or_404(price_id)
-    price.seal_type_id = data.get("seal_type_id", price.seal_type_id)
-    price.finish_id = data.get("finish_id", price.finish_id)
+    seal_type_id = data.get("seal_type_id")
+    seal_type_name = data.get("seal_type")
+    finish_id = data.get("finish_id")
+    finish_name = data.get("finish")
+    quantity = data.get("quantity", price.quantity)
+
+    if not seal_type_id and seal_type_name:
+        seal_type = SealType.query.filter_by(name=seal_type_name).first()
+        if not seal_type:
+            seal_type = SealType(name=seal_type_name)
+            db.session.add(seal_type)
+            db.session.commit()
+        seal_type_id = seal_type.id
+
+    if not finish_id and finish_name:
+        finish = Finish.query.filter_by(name=finish_name).first()
+        if not finish:
+            finish = Finish(name=finish_name)
+            db.session.add(finish)
+            db.session.commit()
+        finish_id = finish.id
+
+    price.seal_type_id = seal_type_id or price.seal_type_id
+    price.finish_id = finish_id or price.finish_id
     price.unit_price = data.get("unit_price", price.unit_price)
+    price.quantity = quantity
     db.session.commit()
     return jsonify({"success": True})
 
@@ -688,6 +737,106 @@ def get_all_prices():
         "seal": [p.to_dict() for p in SealPricing.query.all()]
     }
     return jsonify(prices)
+
+
+
+
+# ==== GASKET TYPES CRUD ====
+@app.route("/api/gasket-types", methods=["GET"])
+def get_gasket_types():
+    types = GasketType.query.all()
+    return jsonify([t.to_dict() for t in types])
+
+@app.route("/api/gasket-types", methods=["POST"])
+@admin_required
+def create_gasket_type():
+    data = request.get_json()
+    t = GasketType(name=data["name"])
+    db.session.add(t)
+    db.session.commit()
+    return jsonify(t.to_dict()), 201
+
+@app.route("/api/gasket-types/<int:id>", methods=["PUT"])
+@admin_required
+def update_gasket_type(id):
+    t = GasketType.query.get_or_404(id)
+    data = request.get_json()
+    t.name = data["name"]
+    db.session.commit()
+    return jsonify(t.to_dict())
+
+@app.route("/api/gasket-types/<int:id>", methods=["DELETE"])
+@admin_required
+def delete_gasket_type(id):
+    t = GasketType.query.get_or_404(id)
+    db.session.delete(t)
+    db.session.commit()
+    return jsonify({"success": True})
+
+# ==== GASKET PRICING CRUD ====
+@app.route("/api/gasket-pricing", methods=["GET"])
+def get_gasket_pricing():
+    pricing = GasketPricing.query.all()
+    return jsonify([p.to_dict() for p in pricing])
+
+@app.route("/api/gasket-pricing", methods=["POST"])
+@admin_required
+def add_gasket_pricing():
+    data = request.get_json()
+    gasket_type_id = data.get("gasket_type_id")
+    gasket_type_name = data.get("gasket_type")
+
+    # If only a name is provided, look up or create the GasketType entry
+    if not gasket_type_id and gasket_type_name:
+        gasket_type = GasketType.query.filter_by(name=gasket_type_name).first()
+        if not gasket_type:
+            gasket_type = GasketType(name=gasket_type_name)
+            db.session.add(gasket_type)
+            db.session.commit()
+        gasket_type_id = gasket_type.id
+
+        # Now create the pricing row with the resolved ID
+    price = GasketPricing(
+        gasket_type_id=gasket_type_id,
+        color=data.get("color"),
+        quantity=data.get("quantity", 1),
+        unit_price=data.get("unit_price")
+    )
+    db.session.add(price)
+    db.session.commit()
+    return jsonify({"success": True, "id": price.id})
+
+@app.route("/api/gasket-pricing/<int:price_id>", methods=["PUT"])
+@admin_required
+def update_gasket_pricing(price_id):
+    data = request.get_json()
+    price = GasketPricing.query.get_or_404(price_id)
+    gasket_type_id = data.get("gasket_type_id")
+    gasket_type_name = data.get("gasket_type")
+
+    # Same logic: resolve ID from name if needed
+    if not gasket_type_id and gasket_type_name:
+        gasket_type = GasketType.query.filter_by(name=gasket_type_name).first()
+        if not gasket_type:
+            gasket_type = GasketType(name=gasket_type_name)
+            db.session.add(gasket_type)
+            db.session.commit()
+        gasket_type_id = gasket_type.id
+
+    price.gasket_type_id = gasket_type_id or price.gasket_type_id
+    price.color = data.get("color", price.color)
+    price.quantity = data.get("quantity", price.quantity)
+    price.unit_price = data.get("unit_price", price.unit_price)
+    db.session.commit()
+    return jsonify({"success": True})
+
+@app.route("/api/gasket-pricing/<int:price_id>", methods=["DELETE"])
+@admin_required
+def delete_gasket_pricing(price_id):
+    price = GasketPricing.query.get_or_404(price_id)
+    db.session.delete(price)
+    db.session.commit()
+    return jsonify({"success": True})
 
 # ==== DB INIT ====
 if __name__ == "__main__":

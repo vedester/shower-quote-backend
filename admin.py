@@ -1,6 +1,8 @@
 from models import (
     db, Admin, ShowerType, GlassType, Finish, HardwareType, GlassThickness, SealType,
-    HardwarePricing, SealPricing, GlassPricing, Model, ModelGlassComponent, ModelHardwareComponent, ModelSealComponent
+    HardwarePricing, SealPricing, GlassPricing, Model, ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,
+    # Import GasketType and GasketPricing
+    GasketType, GasketPricing
 )
 from flask import Flask
 from dotenv import load_dotenv
@@ -72,28 +74,38 @@ def seed_hardware_pricing():
 
 def seed_gasket_pricing():
     with app.app_context():
-        gasket_types = ["Gasket Type 1", "Gasket Type 2", "Gasket Type 3"]
-        finishes = ["Black", "White", "Transparent", "Grey", "Beige"]
+        gasket_types = ["Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"]
+        colors = ["Black", "White", "Transparent", "Grey", "Beige", "Gold", "Nickel", "Rose Gold"]
+        # Prices matrix should match gasket_types x colors.
+        # Example: fill with 0 or real prices as needed. Expand/adjust as needed.
         prices = [
-            [22, 16, 16, 27, 32],  # Gasket Type 1
-            [15, 21, 32, 28, 15],  # Gasket Type 2
-            [15, 25, 21, 31, 25],  # Gasket Type 3
+            [22, 16, 16, 27, 32, 0, 0, 0],  # Gasket Type 1
+            [15, 21, 32, 28, 15, 0, 0, 0],  # Gasket Type 2
+            [15, 25, 21, 31, 25, 0, 0, 0],  # Gasket Type 3
+            [0, 0, 0, 0, 0, 0, 0, 0],      # Magnet (fill real prices below)
         ]
+        # Example Magnet row updated with color prices:
+        magnet_prices = [10, 12, 0, 0, 0, 14, 15, 16]  # adjust as needed
+        prices[3] = magnet_prices
+
         for i, gasket_type in enumerate(gasket_types):
-            seal_type = get_or_create(db.session, SealType, name=gasket_type)
-            for j, finish_name in enumerate(finishes):
-                finish = get_or_create(db.session, Finish, name=finish_name)
-                price = prices[i][j]
-                exists = SealPricing.query.filter_by(seal_type_id=seal_type.id, finish_id=finish.id).first()
-                if not exists:
-                    db.session.add(SealPricing(
-                        seal_type_id=seal_type.id,
-                        finish_id=finish.id,
-                        unit_price=price
-                    ))
-                    print(f"SealPricing: {gasket_type} / {finish_name} = {price}")
+            gt = get_or_create(db.session, GasketType, name=gasket_type)
+            for j, color in enumerate(colors):
+                price = prices[i][j] if j < len(prices[i]) else 0
+                if price and price > 0:
+                    exists = GasketPricing.query.filter_by(
+                        gasket_type_id=gt.id, color=color, quantity=1
+                    ).first()
+                    if not exists:
+                        db.session.add(GasketPricing(
+                            gasket_type_id=gt.id,
+                            color=color,
+                            quantity=1,
+                            unit_price=price
+                        ))
+                        print(f"GasketPricing: {gasket_type} / {color} / qty 1 = {price}")
         db.session.commit()
-        print("Gasket/Seal pricing seeded successfully!")
+        print("Gasket pricing seeded successfully!")
 
 def seed_glass_pricing():
     with app.app_context():
@@ -183,7 +195,7 @@ if __name__ == "__main__":
     admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
 
     create_admin_user(admin_username, admin_password)
-    # Showers, glass, finishes, hardware, thicknesses, seals
+    # Showers, glass, finishes, hardware, thicknesses, seals, gaskets
     seed_if_missing(ShowerType, 'name', ["Demo ShowerType", "Handheld", "Rainfall"])
     seed_if_missing(GlassType, 'name', ["Clear", "Frosted", "Tempered", "Tinted"])
     all_finishes = [
@@ -198,7 +210,11 @@ if __name__ == "__main__":
     seed_if_missing(GlassThickness, 'thickness_mm', [6, 8, 10, 12])
     seed_if_missing(SealType, 'name', [
         "Straight Seal", "Angled Seal", "Bottom Seal",
-        "Gasket Type 1", "Gasket Type 2", "Gasket Type 3"
+        "Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"
+    ])
+    # New: GasketType seeding (for the new model)
+    seed_if_missing(GasketType, 'name', [
+        "Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"
     ])
 
     seed_hardware_pricing()

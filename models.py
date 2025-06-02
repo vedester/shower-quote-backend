@@ -138,24 +138,61 @@ class SealType(db.Model):
 
 class SealPricing(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'), nullable=False)
-    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'), nullable=False)
-    unit_price = db.Column(db.Float, nullable=False)
-
-    __table_args__ = (db.UniqueConstraint('seal_type_id', 'finish_id', name='_seal_type_finish_uc'),)
+    seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'))
+    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'))
+    unit_price = db.Column(db.Float)
+    quantity = db.Column(db.Integer, default=1)
 
     seal_type = db.relationship('SealType')
     finish = db.relationship('Finish')
 
     def to_dict(self):
         return {
-            'id': self.id,
-            'seal_type_id': self.seal_type_id,
-            'seal_type': self.seal_type.name if self.seal_type else None,
-            'finish_id': self.finish_id,
-            'finish': self.finish.name if self.finish else None,
-            'unit_price': self.unit_price
+            "id": self.id,
+            "seal_type_id": self.seal_type_id,
+            "seal_type": self.seal_type.name if self.seal_type else "",
+            "finish_id": self.finish_id,
+            "finish": self.finish.name if self.finish else "",
+            "unit_price": self.unit_price,
+            "quantity": self.quantity
         }
+
+# =======================
+# GasketType: Represents a type of gasket (e.g., Magnet, Gasket Type 1, etc.)
+# =======================
+class GasketType(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), unique=True, nullable=False)
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name}
+
+# =======================
+# GasketPricing: price for each gasket type + color + (optional: quantity)
+# =======================
+class GasketPricing(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    gasket_type_id = db.Column(db.Integer, db.ForeignKey('gasket_type.id'), nullable=False)
+    color = db.Column(db.String(32), nullable=False)
+    # Optional: Quantity, if you want to allow bundle/pack pricing. Set to 1 for per-unit pricing.
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Float, nullable=False)
+
+    __table_args__ = (db.UniqueConstraint('gasket_type_id', 'color', 'quantity', name='_gasket_type_color_quantity_uc'),)
+
+    gasket_type = db.relationship('GasketType')
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "gasket_type_id": self.gasket_type_id,
+            "gasket_type": self.gasket_type.name if self.gasket_type else None,
+            "color": self.color,
+            "quantity": self.quantity,
+            "unit_price": self.unit_price
+        }
+
+
 
 # =======================
 # ModelGlassComponent: Glass panel definition per model
