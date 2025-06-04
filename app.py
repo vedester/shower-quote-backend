@@ -6,17 +6,15 @@ from models import (
     GlassThickness, GlassPricing,
     HardwareType, HardwarePricing,
     SealType, SealPricing, 
-    ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,GasketType,GasketPricing
+    ModelGlassComponent, ModelHardwareComponent, ModelSealComponent
 )
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import os
 import uuid
 
-# ==== Load Environment Variables ====
 load_dotenv()
 
-# ==== Flask App Setup ====
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///shower_quote.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -26,7 +24,6 @@ app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_CONTENT_LENGTH', 4 * 1024 * 1024))  # Default to 4MB
 app.debug = os.getenv('DEBUG', 'False').lower() == 'true'
 
-# Ensure upload folder exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
 
@@ -50,7 +47,7 @@ def admin_required(fn):
 def home():
     return jsonify({"message": "Flask backend is running!"})
 
-# ==== AUTHENTICATION ====
+# ==== AUTH ====
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -59,18 +56,15 @@ def login():
     admin = Admin.query.filter_by(username=username).first()
     if admin and admin.check_password(password):
         access_token = create_access_token(
-            identity=str(admin.id),  # identity as string
+            identity=str(admin.id),
             additional_claims={"role": "admin"}
         )
         return jsonify({"success": True, "access_token": access_token})
     return jsonify({"success": False, "error": "Invalid credentials"}), 401
 
-
-
 @app.route("/api/logout", methods=["POST"])
 @jwt_required()
 def logout():
-    # With JWT, logout is handled on the client side by discarding the token.
     return jsonify({"success": True, "message": "Logged out (client should discard JWT token)."})
 
 # ==== SHOWER TYPES CRUD ====
@@ -83,7 +77,14 @@ def get_shower_types():
 @admin_required
 def create_shower_type():
     data = request.get_json()
-    t = ShowerType(name=data["name"])
+    t = ShowerType(
+        name=data["name"],
+        description=data.get("description"),
+        profit_margin=data.get("profit_margin", 0.2),
+        vat_rate=data.get("vat_rate", 0.18),
+        needs_custom_quote=data.get("needs_custom_quote", False),
+        image_path=data.get("image_path")
+    )
     db.session.add(t)
     db.session.commit()
     return jsonify(t.to_dict()), 201
@@ -93,7 +94,13 @@ def create_shower_type():
 def update_shower_type(id):
     t = ShowerType.query.get_or_404(id)
     data = request.get_json()
-    t.name = data["name"]
+    t.name = data.get("name", t.name)
+    t.description = data.get("description", t.description)
+    t.profit_margin = data.get("profit_margin", t.profit_margin)
+    t.vat_rate = data.get("vat_rate", t.vat_rate)
+    t.needs_custom_quote = data.get("needs_custom_quote", t.needs_custom_quote)
+    if "image_path" in data:
+        t.image_path = data["image_path"]
     db.session.commit()
     return jsonify(t.to_dict())
 
@@ -105,23 +112,22 @@ def delete_shower_type(id):
     db.session.commit()
     return jsonify({"success": True})
 
-# Helper to save image file
-def save_image(file):
-    if not file: return None
-    filename = secure_filename(file.filename)
-    upload_dir = os.path.join(app.root_path, "static", "uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    filepath = os.path.join(upload_dir, filename)
-    file.save(filepath)
-    # Return relative URL to serve via Flask static route
-    return f"/static/uploads/{filename}"
+@app.route("/api/shower-types/<int:id>/upload-image", methods=["POST"])
+@admin_required
+def upload_shower_type_image(id):
+    t = ShowerType.query.get_or_404(id)
+    image_file = request.files.get("image")
+    if not image_file:
+        return jsonify({"error": "No file uploaded"}), 400
+    image_path = save_image(image_file)
+    t.image_path = image_path
+    db.session.commit()
+    return jsonify(t.to_dict())
 
 # ==== MODELS CRUD ====
-
 @app.route("/api/models", methods=["GET"])
 def get_models():
     models = Model.query.all()
-    # Return image_url as well for frontend preview
     return jsonify([m.to_dict() for m in models])
 
 @app.route("/api/models", methods=["POST"])
@@ -130,7 +136,7 @@ def add_model():
     if request.content_type and request.content_type.startswith("multipart/form-data"):
         name = request.form.get("name")
         description = request.form.get("description")
-        shower_type_id = request.form.get("showerTypeId")
+        shower_type_id = request.form.get("shower_type_id")
         image_file = request.files.get("image")
         image_path = save_image(image_file) if image_file else None
         model = Model(
@@ -161,7 +167,7 @@ def update_model(model_id):
     if request.content_type and request.content_type.startswith("multipart/form-data"):
         name = request.form.get("name")
         description = request.form.get("description")
-        shower_type_id = request.form.get("showerTypeId")
+        shower_type_id = request.form.get("shower_type_id")
         image_file = request.files.get("image")
         if name: model.name = name
         if description: model.description = description
@@ -184,6 +190,15 @@ def delete_model(model_id):
     db.session.delete(model)
     db.session.commit()
     return jsonify({"success": True})
+
+def save_image(file):
+    if not file: return None
+    filename = f"{uuid.uuid4().hex}_{secure_filename(file.filename)}"
+    upload_dir = os.path.join(app.root_path, "static", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    filepath = os.path.join(upload_dir, filename)
+    file.save(filepath)
+    return f"/static/uploads/{filename}"
 
 # ==== GLASS TYPES CRUD ====
 @app.route("/api/glass-types", methods=["GET"])
@@ -222,6 +237,7 @@ def delete_glass_type(glass_type_id):
 
 # ==== GLASS THICKNESS CRUD ====
 @app.route("/api/glass-thickness", methods=["GET"])
+@app.route("/api/glass-thicknesses", methods=["GET"])
 def get_glass_thickness():
     thicknesses = GlassThickness.query.all()
     return jsonify([t.to_dict() for t in thicknesses])
@@ -440,7 +456,6 @@ def add_seal_pricing():
     finish_name = data.get("finish")
     quantity = data.get("quantity", 1)
 
-    # Accept free-text for seal_type: look up or create
     if not seal_type_id and seal_type_name:
         seal_type = SealType.query.filter_by(name=seal_type_name).first()
         if not seal_type:
@@ -449,7 +464,6 @@ def add_seal_pricing():
             db.session.commit()
         seal_type_id = seal_type.id
 
-        # Accept free-text for finish: look up or create
     if not finish_id and finish_name:
         finish = Finish.query.filter_by(name=finish_name).first()
         if not finish:
@@ -458,7 +472,6 @@ def add_seal_pricing():
             db.session.commit()
         finish_id = finish.id
 
-    # HERE: create the new price object!
     price = SealPricing(
         seal_type_id=seal_type_id,
         finish_id=finish_id,
@@ -704,7 +717,7 @@ def delete_gallery_image(image_id):
     db.session.commit()
     return jsonify({"success": True})
 
-# ==== IMAGE UPLOAD ENDPOINT (for gallery and model images) ====
+# ==== IMAGE UPLOAD ENDPOINT ====
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -728,7 +741,7 @@ def upload_image():
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# ==== PRICES ENDPOINT (returns all pricing data with finish/color for seals) ====
+# ==== PRICES ENDPOINT ====
 @app.route("/api/prices", methods=["GET"])
 def get_all_prices():
     prices = {
@@ -738,107 +751,6 @@ def get_all_prices():
     }
     return jsonify(prices)
 
-
-
-
-# ==== GASKET TYPES CRUD ====
-@app.route("/api/gasket-types", methods=["GET"])
-def get_gasket_types():
-    types = GasketType.query.all()
-    return jsonify([t.to_dict() for t in types])
-
-@app.route("/api/gasket-types", methods=["POST"])
-@admin_required
-def create_gasket_type():
-    data = request.get_json()
-    t = GasketType(name=data["name"])
-    db.session.add(t)
-    db.session.commit()
-    return jsonify(t.to_dict()), 201
-
-@app.route("/api/gasket-types/<int:id>", methods=["PUT"])
-@admin_required
-def update_gasket_type(id):
-    t = GasketType.query.get_or_404(id)
-    data = request.get_json()
-    t.name = data["name"]
-    db.session.commit()
-    return jsonify(t.to_dict())
-
-@app.route("/api/gasket-types/<int:id>", methods=["DELETE"])
-@admin_required
-def delete_gasket_type(id):
-    t = GasketType.query.get_or_404(id)
-    db.session.delete(t)
-    db.session.commit()
-    return jsonify({"success": True})
-
-# ==== GASKET PRICING CRUD ====
-@app.route("/api/gasket-pricing", methods=["GET"])
-def get_gasket_pricing():
-    pricing = GasketPricing.query.all()
-    return jsonify([p.to_dict() for p in pricing])
-
-@app.route("/api/gasket-pricing", methods=["POST"])
-@admin_required
-def add_gasket_pricing():
-    data = request.get_json()
-    gasket_type_id = data.get("gasket_type_id")
-    gasket_type_name = data.get("gasket_type")
-
-    # If only a name is provided, look up or create the GasketType entry
-    if not gasket_type_id and gasket_type_name:
-        gasket_type = GasketType.query.filter_by(name=gasket_type_name).first()
-        if not gasket_type:
-            gasket_type = GasketType(name=gasket_type_name)
-            db.session.add(gasket_type)
-            db.session.commit()
-        gasket_type_id = gasket_type.id
-
-        # Now create the pricing row with the resolved ID
-    price = GasketPricing(
-        gasket_type_id=gasket_type_id,
-        color=data.get("color"),
-        quantity=data.get("quantity", 1),
-        unit_price=data.get("unit_price")
-    )
-    db.session.add(price)
-    db.session.commit()
-    return jsonify({"success": True, "id": price.id})
-
-@app.route("/api/gasket-pricing/<int:price_id>", methods=["PUT"])
-@admin_required
-def update_gasket_pricing(price_id):
-    data = request.get_json()
-    price = GasketPricing.query.get_or_404(price_id)
-    gasket_type_id = data.get("gasket_type_id")
-    gasket_type_name = data.get("gasket_type")
-
-    # Same logic: resolve ID from name if needed
-    if not gasket_type_id and gasket_type_name:
-        gasket_type = GasketType.query.filter_by(name=gasket_type_name).first()
-        if not gasket_type:
-            gasket_type = GasketType(name=gasket_type_name)
-            db.session.add(gasket_type)
-            db.session.commit()
-        gasket_type_id = gasket_type.id
-
-    price.gasket_type_id = gasket_type_id or price.gasket_type_id
-    price.color = data.get("color", price.color)
-    price.quantity = data.get("quantity", price.quantity)
-    price.unit_price = data.get("unit_price", price.unit_price)
-    db.session.commit()
-    return jsonify({"success": True})
-
-@app.route("/api/gasket-pricing/<int:price_id>", methods=["DELETE"])
-@admin_required
-def delete_gasket_pricing(price_id):
-    price = GasketPricing.query.get_or_404(price_id)
-    db.session.delete(price)
-    db.session.commit()
-    return jsonify({"success": True})
-
-# ==== DB INIT ====
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()

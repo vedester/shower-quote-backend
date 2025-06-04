@@ -1,17 +1,12 @@
 from models import (
     db, Admin, ShowerType, GlassType, Finish, HardwareType, GlassThickness, SealType,
-    HardwarePricing, SealPricing, GlassPricing, Model, ModelGlassComponent, ModelHardwareComponent, ModelSealComponent,
-    # Import GasketType and GasketPricing
-    GasketType, GasketPricing
+    HardwarePricing, SealPricing, GlassPricing, Model, ModelGlassComponent, ModelHardwareComponent, ModelSealComponent
 )
 from flask import Flask
 from dotenv import load_dotenv
 import os
 
-# ==== Load Environment Variables ====
 load_dotenv()
-
-# ==== Flask App Setup (for DB context only) ====
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///shower_quote.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -29,18 +24,23 @@ def create_admin_user(username, password):
             db.session.commit()
             print(f"Admin user '{username}' created successfully!")
 
-def seed_if_missing(Model, field, values):
+def seed_if_missing(Model, field, values, extra_fields=None):
     with app.app_context():
         for value in values:
             exists = Model.query.filter(getattr(Model, field) == value).first()
+            kwargs = {field: value}
+            if extra_fields: kwargs.update(extra_fields)
             if not exists:
-                db.session.add(Model(**{field: value}))
+                db.session.add(Model(**kwargs))
                 print(f"{Model.__name__} '{value}' added!")
         db.session.commit()
         print(f"{Model.__name__}s seeded successfully!")
 
 def get_or_create(session, Model, **kwargs):
-    instance = session.query(Model).filter_by(**kwargs).first()
+    if 'name' in kwargs:
+        instance = session.query(Model).filter_by(name=kwargs['name']).first()
+    else:
+        instance = session.query(Model).filter_by(**kwargs).first()
     if not instance:
         instance = Model(**kwargs)
         session.add(instance)
@@ -52,9 +52,9 @@ def seed_hardware_pricing():
         hardware_types = ["Hardware Type 1", "Hardware Type 2", "Hardware Type 3"]
         finishes = ["Black", "Gold", "Nickel", "White", "Rose Gold", "Graphite", "Chrome"]
         prices = [
-            [80, 86, 79, 111, 82, 84, 79],      # Hardware Type 1
-            [111, 61, 117, 107, 91, 72, 75],    # Hardware Type 2
-            [95, 110, 59, 56, 69, 56, 109],     # Hardware Type 3
+            [80, 86, 79, 111, 82, 84, 79],
+            [111, 61, 117, 107, 91, 72, 75],
+            [95, 110, 59, 56, 69, 56, 109],
         ]
         for i, hw_type in enumerate(hardware_types):
             hw = get_or_create(db.session, HardwareType, name=hw_type)
@@ -72,46 +72,10 @@ def seed_hardware_pricing():
         db.session.commit()
         print("Hardware pricing seeded successfully!")
 
-def seed_gasket_pricing():
-    with app.app_context():
-        gasket_types = ["Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"]
-        colors = ["Black", "White", "Transparent", "Grey", "Beige", "Gold", "Nickel", "Rose Gold"]
-        # Prices matrix should match gasket_types x colors.
-        # Example: fill with 0 or real prices as needed. Expand/adjust as needed.
-        prices = [
-            [22, 16, 16, 27, 32, 0, 0, 0],  # Gasket Type 1
-            [15, 21, 32, 28, 15, 0, 0, 0],  # Gasket Type 2
-            [15, 25, 21, 31, 25, 0, 0, 0],  # Gasket Type 3
-            [0, 0, 0, 0, 0, 0, 0, 0],      # Magnet (fill real prices below)
-        ]
-        # Example Magnet row updated with color prices:
-        magnet_prices = [10, 12, 0, 0, 0, 14, 15, 16]  # adjust as needed
-        prices[3] = magnet_prices
-
-        for i, gasket_type in enumerate(gasket_types):
-            gt = get_or_create(db.session, GasketType, name=gasket_type)
-            for j, color in enumerate(colors):
-                price = prices[i][j] if j < len(prices[i]) else 0
-                if price and price > 0:
-                    exists = GasketPricing.query.filter_by(
-                        gasket_type_id=gt.id, color=color, quantity=1
-                    ).first()
-                    if not exists:
-                        db.session.add(GasketPricing(
-                            gasket_type_id=gt.id,
-                            color=color,
-                            quantity=1,
-                            unit_price=price
-                        ))
-                        print(f"GasketPricing: {gasket_type} / {color} / qty 1 = {price}")
-        db.session.commit()
-        print("Gasket pricing seeded successfully!")
-
 def seed_glass_pricing():
     with app.app_context():
         glass_types = ["Clear", "Frosted", "Tempered", "Tinted"]
         thicknesses = [6, 8, 10, 12]
-        # Example prices (could be enhanced with real values)
         base_price = 100
         for i, glass_type_name in enumerate(glass_types):
             glass_type = get_or_create(db.session, GlassType, name=glass_type_name)
@@ -134,10 +98,22 @@ def seed_glass_pricing():
 
 def seed_demo_model_with_components():
     with app.app_context():
+        # Create a demo shower type with config, filter only by unique 'name'
+        shower_type = get_or_create(db.session, ShowerType,
+            name="Demo ShowerType"
+        )
+        # Optionally update config fields if needed
+        shower_type.description = "A demo shower type for testing"
+        shower_type.profit_margin = 0.2
+        shower_type.vat_rate = 0.18
+        shower_type.needs_custom_quote = False
+        # Optionally set a demo image
+        shower_type.image_path = "demo_showertype.jpg"
+        db.session.commit()
+
         # Create a demo model
         model = Model.query.filter_by(name="Demo Model 1").first()
         if not model:
-            shower_type = get_or_create(db.session, ShowerType, name="Demo ShowerType")
             model = Model(
                 name="Demo Model 1",
                 description="A sample model for testing",
@@ -151,41 +127,38 @@ def seed_demo_model_with_components():
         # Glass component
         glass_type = GlassType.query.first()
         thickness = GlassThickness.query.first()
-        if glass_type and thickness:
-            if not ModelGlassComponent.query.filter_by(model_id=model.id).first():
-                db.session.add(ModelGlassComponent(
-                    model_id=model.id,
-                    glass_type_id=glass_type.id,
-                    thickness_id=thickness.id,
-                    quantity=2
-                ))
-                print("Glass component added to Demo Model 1.")
+        if glass_type and thickness and not ModelGlassComponent.query.filter_by(model_id=model.id).first():
+            db.session.add(ModelGlassComponent(
+                model_id=model.id,
+                glass_type_id=glass_type.id,
+                thickness_id=thickness.id,
+                quantity=2
+            ))
+            print("Glass component added to Demo Model 1.")
 
         # Hardware component
         hardware_type = HardwareType.query.first()
         finish = Finish.query.filter_by(name="Chrome").first()
-        if hardware_type and finish:
-            if not ModelHardwareComponent.query.filter_by(model_id=model.id).first():
-                db.session.add(ModelHardwareComponent(
-                    model_id=model.id,
-                    hardware_type_id=hardware_type.id,
-                    finish_id=finish.id,
-                    quantity=3
-                ))
-                print("Hardware component added to Demo Model 1.")
+        if hardware_type and finish and not ModelHardwareComponent.query.filter_by(model_id=model.id).first():
+            db.session.add(ModelHardwareComponent(
+                model_id=model.id,
+                hardware_type_id=hardware_type.id,
+                finish_id=finish.id,
+                quantity=3
+            ))
+            print("Hardware component added to Demo Model 1.")
 
         # Seal component
         seal_type = SealType.query.first()
         seal_finish = Finish.query.filter_by(name="Black").first()
-        if seal_type and seal_finish:
-            if not ModelSealComponent.query.filter_by(model_id=model.id).first():
-                db.session.add(ModelSealComponent(
-                    model_id=model.id,
-                    seal_type_id=seal_type.id,
-                    finish_id=seal_finish.id,
-                    quantity=4
-                ))
-                print("Seal component added to Demo Model 1.")
+        if seal_type and seal_finish and not ModelSealComponent.query.filter_by(model_id=model.id).first():
+            db.session.add(ModelSealComponent(
+                model_id=model.id,
+                seal_type_id=seal_type.id,
+                finish_id=seal_finish.id,
+                quantity=4
+            ))
+            print("Seal component added to Demo Model 1.")
 
         db.session.commit()
         print("Demo Model 1 components seeded successfully!")
@@ -193,10 +166,20 @@ def seed_demo_model_with_components():
 if __name__ == "__main__":
     admin_username = os.getenv('ADMIN_USERNAME', 'admin')
     admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
-
     create_admin_user(admin_username, admin_password)
-    # Showers, glass, finishes, hardware, thicknesses, seals, gaskets
-    seed_if_missing(ShowerType, 'name', ["Demo ShowerType", "Handheld", "Rainfall"])
+
+    # Shower types: demo with config
+    seed_if_missing(
+        ShowerType, 'name',
+        ["Demo ShowerType", "Corner Shower", "Frontal Shower", "Bathtub Screen", "CNC-Cut Shower"],
+        extra_fields={
+            "description": "",
+            "profit_margin": 0.2,
+            "vat_rate": 0.18,
+            "needs_custom_quote": False,
+            "image_path": None  # Add a default path or leave as None
+        }
+    )
     seed_if_missing(GlassType, 'name', ["Clear", "Frosted", "Tempered", "Tinted"])
     all_finishes = [
         "Chrome", "Brushed Nickel", "Matte Black", "Gold", "Black", "Nickel", "White",
@@ -212,13 +195,8 @@ if __name__ == "__main__":
         "Straight Seal", "Angled Seal", "Bottom Seal",
         "Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"
     ])
-    # New: GasketType seeding (for the new model)
-    seed_if_missing(GasketType, 'name', [
-        "Gasket Type 1", "Gasket Type 2", "Gasket Type 3", "Magnet"
-    ])
 
     seed_hardware_pricing()
-    seed_gasket_pricing()
     seed_glass_pricing()
     seed_demo_model_with_components()
     print("\nDatabase initialization and seeding complete!")
