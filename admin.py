@@ -148,14 +148,12 @@ def seed_demo_model_with_components():
             ))
             print("Hardware component added to Demo Model 1.")
 
-        # Seal component
+        # Seal component (NO finish field)
         seal_type = SealType.query.first()
-        seal_finish = Finish.query.filter_by(name="Black").first()
-        if seal_type and seal_finish and not ModelSealComponent.query.filter_by(model_id=model.id).first():
+        if seal_type and not ModelSealComponent.query.filter_by(model_id=model.id).first():
             db.session.add(ModelSealComponent(
                 model_id=model.id,
                 seal_type_id=seal_type.id,
-                finish_id=seal_finish.id,
                 quantity=4
             ))
             print("Seal component added to Demo Model 1.")

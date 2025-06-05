@@ -187,9 +187,25 @@ def update_model(model_id):
 @admin_required
 def delete_model(model_id):
     model = Model.query.get_or_404(model_id)
+    # Delete all related components before deleting model
+    ModelGlassComponent.query.filter_by(model_id=model.id).delete()
+    ModelHardwareComponent.query.filter_by(model_id=model.id).delete()
+    ModelSealComponent.query.filter_by(model_id=model.id).delete()
     db.session.delete(model)
     db.session.commit()
     return jsonify({"success": True})
+
+@app.route("/api/models/<int:model_id>/upload-image", methods=["POST"])
+@admin_required
+def upload_model_image(model_id):
+    model = Model.query.get_or_404(model_id)
+    image_file = request.files.get("image")
+    if not image_file:
+        return jsonify({"error": "No file uploaded"}), 400
+    image_path = save_image(image_file)
+    model.image_path = image_path
+    db.session.commit()
+    return jsonify(model.to_dict())
 
 def save_image(file):
     if not file: return None
@@ -452,11 +468,11 @@ def add_seal_pricing():
     data = request.get_json()
     seal_type_id = data.get("seal_type_id")
     seal_type_name = data.get("seal_type")
-    finish_id = data.get("finish_id")
-    finish_name = data.get("finish")
     quantity = data.get("quantity", 1)
 
+
     if not seal_type_id and seal_type_name:
+       if not seal_type_id and seal_type_name:
         seal_type = SealType.query.filter_by(name=seal_type_name).first()
         if not seal_type:
             seal_type = SealType(name=seal_type_name)
@@ -464,17 +480,10 @@ def add_seal_pricing():
             db.session.commit()
         seal_type_id = seal_type.id
 
-    if not finish_id and finish_name:
-        finish = Finish.query.filter_by(name=finish_name).first()
-        if not finish:
-            finish = Finish(name=finish_name)
-            db.session.add(finish)
-            db.session.commit()
-        finish_id = finish.id
+   
 
     price = SealPricing(
         seal_type_id=seal_type_id,
-        finish_id=finish_id,
         unit_price=data.get("unit_price"),
         quantity=quantity
     )
@@ -489,8 +498,6 @@ def update_seal_pricing(price_id):
     price = SealPricing.query.get_or_404(price_id)
     seal_type_id = data.get("seal_type_id")
     seal_type_name = data.get("seal_type")
-    finish_id = data.get("finish_id")
-    finish_name = data.get("finish")
     quantity = data.get("quantity", price.quantity)
 
     if not seal_type_id and seal_type_name:
@@ -501,16 +508,7 @@ def update_seal_pricing(price_id):
             db.session.commit()
         seal_type_id = seal_type.id
 
-    if not finish_id and finish_name:
-        finish = Finish.query.filter_by(name=finish_name).first()
-        if not finish:
-            finish = Finish(name=finish_name)
-            db.session.add(finish)
-            db.session.commit()
-        finish_id = finish.id
-
     price.seal_type_id = seal_type_id or price.seal_type_id
-    price.finish_id = finish_id or price.finish_id
     price.unit_price = data.get("unit_price", price.unit_price)
     price.quantity = quantity
     db.session.commit()
@@ -600,6 +598,7 @@ def delete_model_hardware_component(comp_id):
     db.session.delete(comp)
     db.session.commit()
     return jsonify({"success": True})
+# ==== MODEL SEAL COMPONENTS CRUD ====
 
 @app.route("/api/model-seal-components/<int:model_id>", methods=["GET"])
 def get_model_seal_components(model_id):
@@ -613,7 +612,6 @@ def add_model_seal_component():
     comp = ModelSealComponent(
         model_id=data["model_id"],
         seal_type_id=data["seal_type_id"],
-        finish_id=data["finish_id"],
         quantity=data.get("quantity", 1)
     )
     db.session.add(comp)
@@ -626,7 +624,6 @@ def update_model_seal_component(comp_id):
     data = request.get_json()
     comp = ModelSealComponent.query.get_or_404(comp_id)
     comp.seal_type_id = data.get("seal_type_id", comp.seal_type_id)
-    comp.finish_id = data.get("finish_id", comp.finish_id)
     comp.quantity = data.get("quantity", comp.quantity)
     db.session.commit()
     return jsonify({"success": True})

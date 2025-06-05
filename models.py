@@ -124,18 +124,17 @@ class SealType(db.Model):
 class SealPricing(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'))
-    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'))
+    
     unit_price = db.Column(db.Float)
     quantity = db.Column(db.Integer, default=1)
     seal_type = db.relationship('SealType')
-    finish = db.relationship('Finish')
+    
     def to_dict(self):
         return {
             "id": self.id,
             "seal_type_id": self.seal_type_id,
             "seal_type": self.seal_type.name if self.seal_type else "",
-            "finish_id": self.finish_id,
-            "finish": self.finish.name if self.finish else "",
+            
             "unit_price": self.unit_price,
             "quantity": self.quantity
         }
@@ -183,17 +182,14 @@ class ModelSealComponent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     model_id = db.Column(db.Integer, db.ForeignKey('model.id'), nullable=False)
     seal_type_id = db.Column(db.Integer, db.ForeignKey('seal_type.id'), nullable=False)
-    finish_id = db.Column(db.Integer, db.ForeignKey('finish.id'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False, default=1)
     seal_type = db.relationship('SealType')
-    finish = db.relationship('Finish')
+   
     def to_dict(self):
         return {
             'id': self.id,
             'seal_type_id': self.seal_type_id,
             'seal_type': self.seal_type.name if self.seal_type else None,
-            'finish_id': self.finish_id,
-            'finish': self.finish.name if self.finish else None,
             'quantity': self.quantity
         }
 
